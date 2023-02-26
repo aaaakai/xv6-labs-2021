@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fcntl.h"
+#include "fs.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -27,6 +31,22 @@ void
 trapinithart(void)
 {
   w_stvec((uint64)kernelvec);
+}
+
+// if addr in p's vma ,return index of vma, otherwise -1
+int
+invma(struct proc *p, uint64 addr)
+{
+  if(p == 0){
+    return -1;
+  }
+  for(int i = 0; i < NVMA; i++){
+    if(p->vma[i].valid == 1){
+      if(p->vma[i].addr <= addr && (p->vma[i].addr + p->vma[i].length) > addr)
+        return i;
+    }
+  }
+  return -1;
 }
 
 //
@@ -65,6 +85,26 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if((r_scause() == 13 || r_scause() == 15) && invma(p, r_stval()) >= 0){
+    uint64 newpage, va = PGROUNDDOWN(r_stval());
+    if((newpage = (uint64)kalloc()) == 0)
+      panic("cant allocate for vma");
+    int perm = PTE_U;
+    int vmaindex = invma(p, r_stval());
+    int prot = p->vma[vmaindex].prot;
+    if(prot & PROT_READ)
+      perm |= PTE_R;
+    if(prot & PROT_WRITE)
+      perm |= PTE_W;
+    if(mappages(p->pagetable, va, PGSIZE, newpage, perm) < 0)
+      panic("cant mappage for vma");
+    memset((void*)newpage, 0, PGSIZE);
+    struct inode *inode = p->vma[vmaindex].mapfile->ip;
+    begin_op();
+    ilock(inode);
+    readi(inode, 0, newpage, va - p->vma[vmaindex].addr, PGSIZE);
+    iunlock(inode);
+    end_op();
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {

@@ -82,6 +82,20 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+// vma structure used for mmap
+struct vma
+{
+  int valid;
+  uint64 addr;
+  int length;
+  int prot;
+  int flag;
+  struct file *mapfile;
+  int offset;
+};
+
+#define NVMA 16     // max number of vma of a proc
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -105,4 +119,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  struct vma vma[NVMA];        // Peocess vma for mmap
 };

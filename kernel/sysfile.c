@@ -484,3 +484,78 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  uint64 mapaddr;
+  int length, flag, prot, fd, offset, nvma;
+  struct file *file;
+  if(argaddr(0, &mapaddr) < 0 || argint(1, &length) || argint(2, &prot) < 0 ||
+        argint(3, &flag) < 0 || argint(4, &fd) < 0 || argint(5, &offset) < 0){
+    return -1;
+  }
+  struct proc *proc = myproc();
+  if((file = proc->ofile[fd]) == 0){
+    return -1;
+  }
+  if((!file->writable) && (prot & PROT_WRITE) && (flag != MAP_PRIVATE))
+    return -1;
+  // find a free vma
+  for(nvma = 0; nvma < NVMA; nvma++){
+    if(proc->vma[nvma].valid == 0)
+      break;
+  }
+  if(nvma == NVMA)
+    return -1;
+  filedup(file);
+  mapaddr = PGROUNDUP(proc->sz);
+  proc->vma[nvma].valid = 1;
+  proc->vma[nvma].addr = mapaddr;
+  proc->vma[nvma].length = length;
+  proc->vma[nvma].prot = prot;
+  proc->vma[nvma].flag = flag;
+  proc->vma[nvma].mapfile = file;
+  proc->vma[nvma].offset = offset;
+  proc->sz = mapaddr + length;
+  return mapaddr;
+}
+extern int invma(struct proc*, uint64);
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int length, vmaindex;
+  struct file *file;
+  struct proc *p = myproc();
+  
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+    return -1;
+  
+  if((vmaindex = invma(p, addr)) < 0)
+    return -1;
+  file = p->vma[vmaindex].mapfile;
+  if(p->vma[vmaindex].flag == MAP_SHARED){
+    filewrite(file, addr, length);
+  }
+  for(uint64 unmap = addr; unmap < addr + length; unmap += PGSIZE){
+    pte_t *pte = walk(p->pagetable, unmap, 0);
+    if((pte != 0) && (*pte & PTE_V)){
+      uvmunmap(p->pagetable, addr, length / PGSIZE, 1);
+    }
+  }
+  if(addr == p->vma[vmaindex].addr){
+    if((addr + length) == p->vma[vmaindex].addr + p->vma[vmaindex].length){
+      p->vma[vmaindex].valid = 0;
+      fileclose(file);
+    }else{
+      p->vma[vmaindex].addr += length;
+      p->vma[vmaindex].length -= length;
+    }
+  } else if((addr + length) == p->vma[vmaindex].addr + p->vma[vmaindex].length){
+    p->vma[vmaindex].length -= length;
+  } else
+    return -1;
+  return 0;
+}
